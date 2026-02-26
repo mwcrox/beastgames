@@ -1,0 +1,428 @@
+:root {
+    --bg: #0b0f19;
+    --text: #e8eefc;
+    --muted: #a9b6d6;
+    --accent: #6ee7ff;
+    --danger: #ff5a7a;
+    --ok: #6dff9a;
+
+    --slotRing: rgba(110, 231, 255, 0.18);
+    --slotInner: rgba(110, 231, 255, 0.10);
+
+    --box: #1b2946;
+    --box2: #15203a;
+
+    --glow: 0 0 0 3px rgba(110, 231, 255, 0.35), 0 0 28px rgba(110, 231, 255, 0.25);
+    --glowStrong: 0 0 0 3px rgba(255, 223, 110, 0.45), 0 0 34px rgba(255, 223, 110, 0.35);
+    --glowWrong: 0 0 0 3px rgba(255, 90, 122, 0.40), 0 0 34px rgba(255, 90, 122, 0.28);
+
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    --radius: 18px;
+}
+
+* {
+    box-sizing: border-box
+}
+
+html,
+body {
+    height: 100%
+}
+
+body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    background: radial-gradient(1200px 800px at 50% 10%, #18274a 0%, var(--bg) 55%, #060912 100%);
+    color: var(--text);
+    overflow: hidden;
+}
+
+.app {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+header {
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: linear-gradient(180deg, rgba(18, 26, 42, 0.9), rgba(18, 26, 42, 0.55));
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(10px);
+}
+
+.title {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 220px;
+}
+
+.title h1 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 800;
+}
+
+.title .sub {
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.status {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    font-size: 13px;
+    color: var(--muted);
+    padding: 0 8px;
+    line-height: 1.2;
+}
+
+.status strong {
+    color: var(--text)
+}
+
+.controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 220px;
+}
+
+button {
+    border: 0;
+    border-radius: 14px;
+    padding: 10px 12px;
+    color: var(--text);
+    background: linear-gradient(180deg, #1b2a4a, #14213c);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+    cursor: pointer;
+    font-weight: 700;
+    transition: transform .08s ease, filter .15s ease, opacity .15s ease;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+button:hover {
+    filter: brightness(1.08)
+}
+
+button:active {
+    transform: translateY(1px)
+}
+
+button.secondary {
+    background: linear-gradient(180deg, #18233f, #0f1932);
+    color: var(--muted);
+    box-shadow: none;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+button.good {
+    background: linear-gradient(180deg, #1f4c3a, #123225);
+    border: 1px solid rgba(109, 255, 154, 0.25);
+}
+
+button[disabled] {
+    opacity: .45;
+    cursor: not-allowed;
+    filter: saturate(0.8);
+}
+
+main {
+    position: relative;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+}
+
+.boardShell {
+    width: min(92vw, 820px);
+    height: min(78vh, 720px);
+    border-radius: calc(var(--radius) + 10px);
+    background: linear-gradient(180deg, rgba(18, 26, 42, 0.75), rgba(10, 14, 25, 0.55));
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: var(--shadow);
+    position: relative;
+    overflow: hidden;
+}
+
+.board {
+    position: absolute;
+    inset: 14px;
+    border-radius: var(--radius);
+    background: radial-gradient(900px 500px at 50% 30%, rgba(110, 231, 255, 0.08), rgba(0, 0, 0, 0) 60%);
+    border: 1px dashed rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+    touch-action: none;
+}
+
+/* slots (no labels on outer 1-10) */
+.slot {
+    position: absolute;
+    width: 84px;
+    height: 84px;
+    border-radius: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    color: rgba(169, 182, 214, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(4px);
+    pointer-events: none;
+    user-select: none;
+}
+
+.slot.outer {
+    box-shadow: inset 0 0 0 1px var(--slotRing);
+}
+
+.slot.inner {
+    box-shadow: inset 0 0 0 1px var(--slotInner);
+}
+
+/* boxes */
+.box {
+    position: absolute;
+    width: 84px;
+    height: 84px;
+    border-radius: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    font-weight: 900;
+    background: linear-gradient(180deg, var(--box), var(--box2));
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    box-shadow: 0 12px 26px rgba(0, 0, 0, 0.35);
+    cursor: grab;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: box-shadow .18s ease, transform .18s ease, opacity .2s ease;
+}
+
+.box:active {
+    cursor: grabbing
+}
+
+.box.dragging {
+    transform: scale(1.03);
+    box-shadow: 0 18px 36px rgba(0, 0, 0, 0.45), 0 0 0 2px rgba(110, 231, 255, 0.18);
+    z-index: 50;
+}
+
+.box.disabled {
+    cursor: default
+}
+
+.box.selected {
+    box-shadow: var(--glow);
+    transform: translateY(-1px);
+}
+
+.box.removing {
+    opacity: 0;
+    transform: scale(0.92);
+    pointer-events: none;
+}
+
+/* overlay / modal */
+.overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(10px);
+    z-index: 200;
+    padding: 18px;
+}
+
+.modal {
+    width: min(520px, 92vw);
+    border-radius: 22px;
+    background: linear-gradient(180deg, rgba(18, 26, 42, 0.95), rgba(10, 14, 25, 0.92));
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+    padding: 18px;
+}
+
+.modal h2 {
+    margin: 0 0 8px 0;
+    font-size: 18px;
+}
+
+.modal p {
+    margin: 0 0 12px 0;
+    color: var(--muted);
+    line-height: 1.35;
+    font-size: 13px;
+}
+
+.row {
+    display: flex;
+    gap: 10px;
+    margin: 10px 0 14px 0;
+}
+
+.row input {
+    flex: 1;
+    padding: 12px 12px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text);
+    outline: none;
+    font-weight: 700;
+}
+
+.row input::placeholder {
+    color: rgba(169, 182, 214, 0.6)
+}
+
+.modalActions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    align-items: center;
+    margin-top: 12px;
+}
+
+/* coin flip (slower) */
+.coinWrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    margin-top: 10px;
+}
+
+.coin {
+    width: 140px;
+    height: 140px;
+    position: relative;
+    transform-style: preserve-3d;
+    border-radius: 999px;
+    box-shadow: 0 25px 70px rgba(0, 0, 0, 0.55);
+}
+
+.coinFace {
+    position: absolute;
+    inset: 0;
+    border-radius: 999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 900;
+    text-align: center;
+    padding: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.05) 55%, rgba(0, 0, 0, 0.15) 100%);
+    backface-visibility: hidden;
+}
+
+.coinFace.front {
+    transform: translateZ(2px);
+}
+
+.coinFace.back {
+    transform: rotateY(180deg) translateZ(2px);
+}
+
+.coinName {
+    font-size: 14px;
+    line-height: 1.1;
+    color: var(--text);
+    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.55);
+}
+
+.coinSub {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 6px;
+    text-align: center;
+    max-width: 380px;
+}
+
+.spin {
+    animation: spinCoin 3.5s cubic-bezier(.2, .8, .2, 1) infinite;
+}
+
+@keyframes spinCoin {
+    0% {
+        transform: rotateY(0deg) rotateX(0deg)
+    }
+
+    50% {
+        transform: rotateY(540deg) rotateX(22deg)
+    }
+
+    100% {
+        transform: rotateY(1080deg) rotateX(0deg)
+    }
+}
+
+/* win state */
+body.win {
+    background: radial-gradient(1200px 800px at 50% 10%, rgba(255, 223, 110, 0.35) 0%, rgba(255, 184, 0, 0.20) 35%, #05070e 100%);
+}
+
+.winGlow {
+    box-shadow: var(--glowStrong);
+    border-color: rgba(255, 223, 110, 0.35) !important;
+}
+
+/* wrong state flash */
+body.wrong {
+    background: radial-gradient(1200px 800px at 50% 10%, rgba(255, 90, 122, 0.28) 0%, rgba(255, 90, 122, 0.10) 35%, #05070e 100%);
+}
+
+.wrongGlow {
+    box-shadow: var(--glowWrong);
+    border-color: rgba(255, 90, 122, 0.35) !important;
+}
+
+.hint {
+    position: absolute;
+    right: 18px;
+    bottom: 14px;
+    color: rgba(169, 182, 214, 0.65);
+    font-size: 12px;
+    user-select: none;
+    pointer-events: none;
+    text-align: right;
+}
+
+.pill {
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.04);
+    margin-left: 8px;
+}
+
+.dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(110, 231, 255, 0.8);
+    box-shadow: 0 0 0 3px rgba(110, 231, 255, 0.16);
+}

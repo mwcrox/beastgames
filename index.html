@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Beast Games</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <div class="app">
+        <header>
+            <div class="title">
+                <h1>Beast Games</h1>
+                <div class="sub" id="roundInfo">Round: <strong id="roundNum">1</strong> • Boxes left: <strong
+                        id="boxesLeft">10</strong></div>
+            </div>
+
+            <div class="status" id="statusText">
+                Loading…
+            </div>
+
+            <div class="controls">
+                <button class="secondary" id="resetBtn" title="Reset everything">Reset</button>
+                <button class="good" id="doneMovingBtn" disabled>Done Moving</button>
+                <button class="good" id="lockBtn" disabled>Lock In</button>
+            </div>
+        </header>
+
+        <main>
+            <div class="boardShell" id="boardShell">
+                <div class="board" id="board"></div>
+                <div class="hint">
+                    Drag boxes during <strong>Move</strong> • Tap to select during <strong>Pick/Guess</strong>
+                    <span class="pill"><span class="dot"></span><span id="phasePill">—</span></span>
+                </div>
+            </div>
+
+            <div class="overlay" id="overlay" style="display:none;">
+                <div class="modal" id="modal"></div>
+            </div>
+        </main>
+    </div>
+
+    <script src="script.js" defer></script>
+</body>
+
+</html>

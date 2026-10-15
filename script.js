@@ -1,739 +1,1238 @@
 (() => {
-    const $ = (sel, el = document) => el.querySelector(sel);
-    const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
-    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-    const shuffle = (arr) => {
-        const a = arr.slice();
-        for (let i = a.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [a[i], a[j]] = [a[j], a[i]];
-        }
-        return a;
-    };
+    'use strict';
 
-    const board = $("#board");
-    const overlay = $("#overlay");
-    const modal = $("#modal");
+    const $ = (selector, root = document) => root.querySelector(selector);
 
-    const statusText = $("#statusText");
-    const roundNumEl = $("#roundNum");
-    const boxesLeftEl = $("#boxesLeft");
-    const phasePill = $("#phasePill");
-
-    const doneMovingBtn = $("#doneMovingBtn");
-    const lockBtn = $("#lockBtn");
-    const resetBtn = $("#resetBtn");
-    const boardShell = $("#boardShell");
+    const ui = Object.fromEntries([
+        'app',
+        'board',
+        'boardShell',
+        'roundNum',
+        'boxesLeft',
+        'phasePill',
+        'statusText',
+        'statusHint',
+        'activePlayer',
+        'actionBtn',
+        'resetBtn',
+        'helpBtn',
+        'overlay',
+        'modal'
+    ].map(id => [id, document.getElementById(id)]));
 
     const PHASE = Object.freeze({
-        NAMES: "NAMES",
-        COIN: "COIN",
-
-        LOOK_AWAY_FOR_MOVE: "LOOK_AWAY_FOR_MOVE",
-        MOVE: "MOVE",
-
-        PICK_WINNER: "PICK_WINNER",     // hider selects winning case (after moving)
-        PASS_TO_GUESS: "PASS_TO_GUESS",
-        GUESS: "GUESS",
-
-        WIN: "WIN"
+        SETUP: 'setup',
+        COIN: 'coin',
+        PRIVATE: 'private',
+        MOVE: 'move',
+        PICK: 'pick',
+        PASS: 'pass',
+        GUESS: 'guess',
+        RESULT: 'result',
+        WIN: 'win'
     });
 
-    let phase = PHASE.NAMES;
-
-    let players = { A: "", B: "" };
-    let coinWinner = "A";  // goes first as GUESSER
-    let guesser = "A";
-    let hider = "B";
-
-    let round = 1;
-
-    let winningBoxId = null;
-    let selectedWinningBoxId = null;
-    let selectedGuessBoxId = null;
-
+    const CASE_COUNT = 10;
     const SLOT_COUNT = 15;
-    const OUTER_SLOTS = 10;
-    const INNER_SLOTS = 5;
+    const COIN_SPIN_MS = 6500;
+    const COIN_RESULT_MS = 5200;
+    const DRAG_THRESHOLD = 7;
 
-    let slotCenters = new Map();
-    let slotEls = new Map();
+    const timers = new Set();
+    const slots = new Map();
+    const cases = new Map();
 
-    let slotToBox = new Map();
-    let boxToSlot = new Map();
-    let aliveBoxes = new Set();
+    let centers = [];
+    let caseSize = 64;
+    let drag = null;
+    let layoutFrame = 0;
+    let dragFrame = 0;
+    let suppressClick = null;
+    let modalClose = null;
+    let returnFocus = null;
+    let state;
 
-    let dragging = null;
-    let allowDrag = false;
+    const escapeHTML = text => String(text).replace(/[&<>"']/g, char => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    }[char]));
 
-    function computeSlotCenters() {
-        const rect = board.getBoundingClientRect();
-        const w = rect.width;
-        const h = rect.height;
-        const cx = w / 2;
-        const cy = h / 2;
+    const otherPlayer = player => player === 'A' ? 'B' : 'A';
 
-        const boxSize = 84;
-        const pad = 18;
-        const maxR = Math.min(w, h) / 2 - (boxSize / 2) - pad;
+    const name = player => escapeHTML(state.players[player]);
 
-        const outerR = clamp(maxR, 160, 300);
-        const innerR = clamp(outerR * 0.42, 70, 140);
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
-        const centers = new Map();
+    /* Timers */
 
-        for (let i = 0; i < OUTER_SLOTS; i++) {
-            const angle = (-Math.PI / 2) + (i * (2 * Math.PI / OUTER_SLOTS));
-            const x = cx + outerR * Math.cos(angle);
-            const y = cy + outerR * Math.sin(angle);
-            centers.set(`slot-${i + 1}`, { x, y, kind: "outer" });
-        }
+    function later(callback, delay) {
+        const id = setTimeout(() => {
+            timers.delete(id);
+            callback();
+        }, delay);
 
-        for (let i = 0; i < INNER_SLOTS; i++) {
-            const angle = (-Math.PI / 2) + (i * (2 * Math.PI / INNER_SLOTS));
-            const x = cx + innerR * Math.cos(angle);
-            const y = cy + innerR * Math.sin(angle);
-            centers.set(`slot-${OUTER_SLOTS + i + 1}`, { x, y, kind: "inner" });
-        }
-
-        slotCenters = centers;
+        timers.add(id);
+        return id;
     }
 
-    function renderSlots() {
-        board.innerHTML = "";
-        slotEls.clear();
-
-        computeSlotCenters();
-
-        for (let i = 1; i <= SLOT_COUNT; i++) {
-            const id = `slot-${i}`;
-            const s = document.createElement("div");
-            s.className = "slot " + (i <= OUTER_SLOTS ? "outer" : "inner");
-            s.dataset.slotId = id;
-
-            // IMPORTANT: Do not label the 1-10 outer locations
-            // (Inner locations can remain subtle dots or be blank)
-            s.textContent = (i <= OUTER_SLOTS) ? "" : "•";
-
-            board.appendChild(s);
-            slotEls.set(id, s);
+    function cancelTimers() {
+        for (const id of timers) {
+            clearTimeout(id);
         }
 
-        for (const boxId of Array.from(aliveBoxes)) {
-            const box = makeOrGetBox(boxId);
-            board.appendChild(box);
-        }
-
-        positionAllSlotsAndBoxes();
+        timers.clear();
     }
 
-    function positionAllSlotsAndBoxes() {
-        computeSlotCenters();
+    /* Game state */
 
-        for (const [slotId, sEl] of slotEls.entries()) {
-            const c = slotCenters.get(slotId);
-            if (!c) continue;
-            sEl.style.left = `${c.x - 84 / 2}px`;
-            sEl.style.top = `${c.y - 84 / 2}px`;
-        }
+    function setPhase(phase) {
+        cancelDrag();
 
-        for (const boxId of aliveBoxes) {
-            if (dragging && dragging.boxId === boxId) continue;
-            const boxEl = makeOrGetBox(boxId);
-            const slotId = boxToSlot.get(boxId);
-            if (!slotId) continue;
-            snapBoxElementToSlot(boxEl, slotId);
-        }
+        state.phase = phase;
+        state.selected = null;
+        state.moveSelected = null;
+
+        render();
     }
 
-    function makeOrGetBox(boxId) {
-        let el = document.getElementById(boxId);
-        if (el) return el;
+    // Each surviving case maps to exactly one slot.
+    function resetGame(keepNames = false) {
+        cancelTimers();
+        cancelDrag();
 
-        el = document.createElement("div");
-        el.className = "box";
-        el.id = boxId;
-        el.dataset.boxId = boxId;
-        el.textContent = boxId.replace("box-", "");
-        el.addEventListener("pointerdown", onBoxPointerDown);
-        el.addEventListener("click", onBoxClick);
-        return el;
-    }
+        const players = keepNames ? state.players : { A: '', B: '' };
 
-    function initBoxes() {
-        aliveBoxes = new Set();
-        slotToBox = new Map();
-        boxToSlot = new Map();
-
-        winningBoxId = null;
-        selectedWinningBoxId = null;
-        selectedGuessBoxId = null;
-
-        for (let i = 1; i <= 10; i++) {
-            const boxId = `box-${i}`;
-            const slotId = `slot-${i}`;
-            aliveBoxes.add(boxId);
-            slotToBox.set(slotId, boxId);
-            boxToSlot.set(boxId, slotId);
-        }
-
-        renderSlots();
-        updateUI();
-    }
-
-    function snapBoxElementToSlot(boxEl, slotId) {
-        const c = slotCenters.get(slotId);
-        if (!c) return;
-        boxEl.style.left = `${c.x - 84 / 2}px`;
-        boxEl.style.top = `${c.y - 84 / 2}px`;
-    }
-
-    function nearestAvailableSlot(x, y, excludeBoxId = null) {
-        let best = null;
-        let bestD = Infinity;
-        for (let i = 1; i <= SLOT_COUNT; i++) {
-            const slotId = `slot-${i}`;
-            const c = slotCenters.get(slotId);
-            if (!c) continue;
-
-            const occupant = slotToBox.get(slotId);
-            if (occupant && occupant !== excludeBoxId) continue;
-
-            const dx = c.x - x;
-            const dy = c.y - y;
-            const d = dx * dx + dy * dy;
-            if (d < bestD) {
-                bestD = d;
-                best = slotId;
-            }
-        }
-        return best;
-    }
-
-    function setBoxSlot(boxId, newSlotId) {
-        const oldSlotId = boxToSlot.get(boxId);
-        if (oldSlotId) slotToBox.delete(oldSlotId);
-
-        slotToBox.set(newSlotId, boxId);
-        boxToSlot.set(boxId, newSlotId);
-
-        const el = makeOrGetBox(boxId);
-        snapBoxElementToSlot(el, newSlotId);
-    }
-
-    function removeBox(boxId) {
-        aliveBoxes.delete(boxId);
-
-        const slotId = boxToSlot.get(boxId);
-        if (slotId) slotToBox.delete(slotId);
-        boxToSlot.delete(boxId);
-
-        const el = document.getElementById(boxId);
-        if (el) {
-            el.classList.add("removing");
-            setTimeout(() => el.remove(), 220);
-        }
-    }
-
-    // ---------------- Drag ----------------
-    function onBoxPointerDown(e) {
-        if (!allowDrag) return;
-        if (phase !== PHASE.MOVE) return;
-
-        const boxEl = e.currentTarget;
-        const boxId = boxEl.dataset.boxId;
-        if (!aliveBoxes.has(boxId)) return;
-
-        boxEl.setPointerCapture(e.pointerId);
-        const boxRect = boxEl.getBoundingClientRect();
-
-        const startSlotId = boxToSlot.get(boxId);
-
-        dragging = {
-            boxId,
-            pointerId: e.pointerId,
-            offsetX: e.clientX - boxRect.left,
-            offsetY: e.clientY - boxRect.top,
-            startSlotId
+        state = {
+            phase: PHASE.SETUP,
+            players,
+            guesser: 'A',
+            hider: 'B',
+            round: 1,
+            positions: new Map(
+                Array.from({ length: CASE_COUNT }, (_, i) => [i + 1, i])
+            ),
+            winner: null,
+            selected: null,
+            moveSelected: null
         };
 
-        if (startSlotId) slotToBox.delete(startSlotId);
+        document.body.classList.remove('win');
+        ui.boardShell.classList.remove('win-glow');
 
-        boxEl.classList.add("dragging");
-        boxEl.style.zIndex = 60;
+        buildBoard();
+        render();
 
-        board.addEventListener("pointermove", onBoardPointerMove);
-        board.addEventListener("pointerup", onBoardPointerUp, { once: true });
-        board.addEventListener("pointercancel", onBoardPointerUp, { once: true });
+        if (keepNames) {
+            startCoinFlip();
+        } else {
+            showNames();
+        }
     }
 
-    function onBoardPointerMove(e) {
-        if (!dragging) return;
-        const boxEl = document.getElementById(dragging.boxId);
-        if (!boxEl) return;
+    /* Board construction and layout */
 
-        const boardRect = board.getBoundingClientRect();
-        const x = e.clientX - boardRect.left - dragging.offsetX;
-        const y = e.clientY - boardRect.top - dragging.offsetY;
+    function buildBoard() {
+        ui.board.replaceChildren();
+        slots.clear();
+        cases.clear();
 
-        boxEl.style.left = `${x}px`;
-        boxEl.style.top = `${y}px`;
-    }
+        for (let slot = 0; slot < SLOT_COUNT; slot++) {
+            const element = document.createElement('button');
 
-    function onBoardPointerUp(e) {
-        board.removeEventListener("pointermove", onBoardPointerMove);
-        if (!dragging) return;
+            element.type = 'button';
+            element.className = 'slot';
+            element.dataset.slot = slot;
+            element.setAttribute('aria-label', `Empty position ${slot + 1}`);
 
-        const { boxId, startSlotId } = dragging;
-        const boxEl = document.getElementById(boxId);
-
-        const boardRect = board.getBoundingClientRect();
-        const centerX = (e.clientX - boardRect.left);
-        const centerY = (e.clientY - boardRect.top);
-
-        const targetSlot = nearestAvailableSlot(centerX, centerY, boxId) || startSlotId;
-
-        if (targetSlot) setBoxSlot(boxId, targetSlot);
-        else if (startSlotId) setBoxSlot(boxId, startSlotId);
-
-        if (boxEl) {
-            boxEl.classList.remove("dragging");
-            boxEl.style.zIndex = "";
+            slots.set(slot, element);
+            ui.board.append(element);
         }
 
-        dragging = null;
-        updateUI();
+        for (const id of state.positions.keys()) {
+            const element = document.createElement('button');
+
+            element.type = 'button';
+            element.className = 'box';
+            element.id = `box-${id}`;
+            element.dataset.case = id;
+            element.textContent = id;
+            element.setAttribute('aria-label', `Case ${id}`);
+
+            cases.set(id, element);
+            ui.board.append(element);
+        }
+
+        layoutBoard();
     }
 
-    // ---------------- Selection ----------------
-    function clearSelections() {
-        selectedWinningBoxId = null;
-        selectedGuessBoxId = null;
-        for (const el of $$(".box", board)) el.classList.remove("selected");
-        lockBtn.disabled = true;
-    }
+    function layoutBoard() {
+        cancelDrag();
 
-    function onBoxClick(e) {
-        const boxEl = e.currentTarget;
-        const boxId = boxEl.dataset.boxId;
-        if (!aliveBoxes.has(boxId)) return;
+        const width = ui.board.clientWidth;
+        const height = ui.board.clientHeight;
 
-        if (phase === PHASE.PICK_WINNER) {
-            // Select winning case (glow), but DO NOT finalize until lock button
-            for (const el of $$(".box", board)) el.classList.remove("selected");
-            selectedWinningBoxId = boxId;
-            boxEl.classList.add("selected");
-            lockBtn.disabled = false;
+        if (!width || !height) {
             return;
         }
 
-        if (phase === PHASE.GUESS) {
-            // Select guess case (glow), but DO NOT finalize until lock button
-            for (const el of $$(".box", board)) el.classList.remove("selected");
-            selectedGuessBoxId = boxId;
-            boxEl.classList.add("selected");
-            lockBtn.disabled = false;
+        centers = [];
+
+        if (width < 620 || height < 480) {
+            const columns = 3;
+            const rows = 5;
+
+            // Logical slot positions produce these starting rows:
+            // Row 1: cases 2, 3, 4
+            // Row 2: case 1, empty, case 5
+            // Row 3: empty, empty, empty
+            // Row 4: case 10, empty, case 6
+            // Row 5: cases 7, 8, 9
+            const mobileSlots = [
+                1, 2, 3,
+                0, 10, 4,
+                11, 12, 13,
+                9, 14, 5,
+                6, 7, 8
+            ];
+
+            const gap = Math.min(
+                14,
+                width * 0.035,
+                height * 0.035
+            );
+
+            caseSize = Math.floor(
+                Math.min(
+                    88,
+                    (width - 16 - gap * (columns - 1)) / columns,
+                    (height - 16 - gap * (rows - 1)) / rows
+                )
+            );
+
+            caseSize = Math.max(1, caseSize);
+
+            const gridWidth =
+                columns * caseSize + (columns - 1) * gap;
+
+            const gridHeight =
+                rows * caseSize + (rows - 1) * gap;
+
+            mobileSlots.forEach((slot, cell) => {
+                const column = cell % columns;
+                const row = Math.floor(cell / columns);
+
+                centers[slot] = {
+                    x:
+                        (width - gridWidth) / 2 +
+                        column * (caseSize + gap) +
+                        caseSize / 2,
+
+                    y:
+                        (height - gridHeight) / 2 +
+                        row * (caseSize + gap) +
+                        caseSize / 2
+                };
+            });
+
+            ui.board.dataset.layout = 'grid';
+        } else {
+            // Circular layout for larger screens.
+            caseSize = Math.floor(
+                Math.min(84, Math.min(width, height) * 0.14)
+            );
+
+            const radius =
+                Math.min(width, height) / 2 -
+                caseSize / 2 -
+                12;
+
+            for (let i = 0; i < SLOT_COUNT; i++) {
+                const outer = i < CASE_COUNT;
+
+                const count = outer
+                    ? CASE_COUNT
+                    : SLOT_COUNT - CASE_COUNT;
+
+                const angle =
+                    -Math.PI / 2 +
+                    (outer ? i : i - CASE_COUNT) *
+                    Math.PI * 2 / count;
+
+                const r = outer ? radius : radius * 0.43;
+
+                centers.push({
+                    x: width / 2 + r * Math.cos(angle),
+                    y: height / 2 + r * Math.sin(angle)
+                });
+            }
+
+            ui.board.dataset.layout = 'ring';
+        }
+
+        ui.board.style.setProperty(
+            '--case-size',
+            `${caseSize}px`
+        );
+
+        for (const [slot, element] of slots) {
+            position(element, slot);
+        }
+
+        for (const [id, slot] of state.positions) {
+            position(cases.get(id), slot);
+        }
+    }
+
+    function position(element, slot) {
+        const center = centers[slot];
+
+        if (!element || !center) {
             return;
         }
+
+        element.style.left = `${center.x - caseSize / 2}px`;
+        element.style.top = `${center.y - caseSize / 2}px`;
     }
 
-    // ---------------- UI / Phase ----------------
-    function setPhase(p) {
-        phase = p;
-        updateUI();
+    function scheduleLayout() {
+        cancelAnimationFrame(layoutFrame);
+        layoutFrame = requestAnimationFrame(layoutBoard);
     }
 
-    function updateUI() {
-        roundNumEl.textContent = String(round);
-        boxesLeftEl.textContent = String(aliveBoxes.size);
+    function occupied(slot) {
+        return [...state.positions.values()].includes(slot);
+    }
 
-        phasePill.textContent =
-            phase === PHASE.MOVE ? "MOVE" :
-                phase === PHASE.PICK_WINNER ? "PICK" :
-                    phase === PHASE.GUESS ? "GUESS" :
-                        phase === PHASE.WIN ? "WIN" :
-                            "—";
+    function moveCase(id, slot) {
+        if (occupied(slot) || !state.positions.has(id)) {
+            return;
+        }
 
-        allowDrag = (phase === PHASE.MOVE);
+        state.positions.set(id, slot);
+        state.moveSelected = null;
 
-        doneMovingBtn.disabled = !(phase === PHASE.MOVE);
+        position(cases.get(id), slot);
+        render();
+    }
 
-        // Lock button behavior/label changes by phase
-        if (phase === PHASE.PICK_WINNER) {
-            lockBtn.textContent = "Lock Winning Case";
-            lockBtn.disabled = !selectedWinningBoxId;
-        } else if (phase === PHASE.GUESS) {
-            lockBtn.textContent = "Lock In Guess";
-            lockBtn.disabled = !selectedGuessBoxId;
+    /* Interface */
+
+    function render() {
+        const { phase, selected, moveSelected } = state;
+
+        ui.roundNum.textContent = state.round;
+        ui.boxesLeft.textContent = state.positions.size;
+        ui.board.dataset.phase = phase;
+
+        const steps = {
+            [PHASE.MOVE]: [
+                '01 / Move',
+                state.players[state.hider],
+                'Mix up the cases.',
+                moveSelected
+                    ? `Case ${moveSelected} selected. Tap an empty space.`
+                    : 'Drag a case, or tap a case then an empty space.',
+                'Done moving'
+            ],
+
+            [PHASE.PICK]: [
+                '02 / Hide',
+                state.players[state.hider],
+                'Choose the winning case.',
+                selected
+                    ? `Case ${selected} selected. Lock it when you’re ready.`
+                    : 'Tap one case. Keep your choice secret.',
+                'Lock winning case'
+            ],
+
+            [PHASE.GUESS]: [
+                '03 / Guess',
+                state.players[state.guesser],
+                'Which case is the winner?',
+                selected
+                    ? `Case ${selected} selected. Ready to take your chance?`
+                    : 'Tap a case, then lock in your guess.',
+                'Lock in guess'
+            ],
+
+            [PHASE.WIN]: [
+                'Winner',
+                state.players[state.guesser],
+                `${state.players[state.guesser]} wins!`,
+                'A perfect pick. Ready for a rematch?',
+                'Play again'
+            ]
+        };
+
+        const content = steps[phase] || [
+            'Get ready',
+            'Two players. One screen.',
+            'Every case counts.',
+            'Follow the instructions to begin your turn.',
+            'Continue'
+        ];
+
+        [
+            ui.phasePill,
+            ui.activePlayer,
+            ui.statusText,
+            ui.statusHint,
+            ui.actionBtn
+        ].forEach((element, i) => {
+            element.textContent = content[i];
+        });
+
+        ui.actionBtn.disabled = !(
+            phase === PHASE.MOVE ||
+            (
+                (phase === PHASE.PICK || phase === PHASE.GUESS) &&
+                selected !== null
+            )
+        );
+
+        for (const [id, element] of cases) {
+            const chosen = selected === id;
+
+            element.classList.toggle('selected', chosen);
+            element.classList.toggle('move-selected', moveSelected === id);
+            element.setAttribute(
+                'aria-pressed',
+                String(chosen || moveSelected === id)
+            );
+
+            element.disabled = ![
+                PHASE.MOVE,
+                PHASE.PICK,
+                PHASE.GUESS
+            ].includes(phase);
+        }
+
+        for (const [slot, element] of slots) {
+            const filled = occupied(slot);
+
+            element.disabled =
+                phase !== PHASE.MOVE ||
+                filled ||
+                moveSelected === null;
+
+            element.setAttribute('aria-hidden', String(filled));
+            element.tabIndex = element.disabled ? -1 : 0;
+        }
+    }
+
+    /* Dragging */
+
+    // Listeners are registered once. Canceled gestures preserve case positions.
+    ui.board.addEventListener('pointerdown', event => {
+        const element = event.target.closest('.box');
+
+        if (
+            !element ||
+            state.phase !== PHASE.MOVE ||
+            drag ||
+            !event.isPrimary ||
+            event.button !== 0
+        ) {
+            return;
+        }
+
+        suppressClick = null;
+
+        const id = Number(element.dataset.case);
+        const rect = element.getBoundingClientRect();
+
+        drag = {
+            id,
+            pointer: event.pointerId,
+            element,
+            slot: state.positions.get(id),
+            startX: event.clientX,
+            startY: event.clientY,
+            offsetX: event.clientX - rect.left,
+            offsetY: event.clientY - rect.top,
+            x: rect.left - ui.board.getBoundingClientRect().left,
+            y: rect.top - ui.board.getBoundingClientRect().top,
+            moved: false,
+            target: null
+        };
+
+        element.setPointerCapture(event.pointerId);
+    });
+
+    ui.board.addEventListener('pointermove', event => {
+        if (!drag || drag.pointer !== event.pointerId) {
+            return;
+        }
+
+        if (
+            !drag.moved &&
+            Math.hypot(
+                event.clientX - drag.startX,
+                event.clientY - drag.startY
+            ) < DRAG_THRESHOLD
+        ) {
+            return;
+        }
+
+        event.preventDefault();
+        drag.moved = true;
+
+        const rect = ui.board.getBoundingClientRect();
+
+        drag.x = clamp(
+            event.clientX - rect.left - drag.offsetX,
+            0,
+            rect.width - caseSize
+        );
+
+        drag.y = clamp(
+            event.clientY - rect.top - drag.offsetY,
+            0,
+            rect.height - caseSize
+        );
+
+        drag.target = findDropTarget(
+            drag.x + caseSize / 2,
+            drag.y + caseSize / 2
+        );
+
+        drag.element.classList.add('dragging');
+
+        if (!dragFrame) {
+            dragFrame = requestAnimationFrame(paintDrag);
+        }
+    });
+
+    function findDropTarget(x, y) {
+        let result = null;
+        let best = (caseSize * .85) ** 2;
+
+        centers.forEach((center, slot) => {
+            if (occupied(slot) && slot !== drag.slot) {
+                return;
+            }
+
+            const distance =
+                (center.x - x) ** 2 +
+                (center.y - y) ** 2;
+
+            if (distance < best) {
+                best = distance;
+                result = slot;
+            }
+        });
+
+        return result;
+    }
+
+    function paintDrag() {
+        dragFrame = 0;
+
+        if (!drag) {
+            return;
+        }
+
+        drag.element.style.left = `${drag.x}px`;
+        drag.element.style.top = `${drag.y}px`;
+
+        for (const [slot, element] of slots) {
+            element.classList.toggle('drop-target', slot === drag.target);
+        }
+    }
+
+    function releaseDrag(commit) {
+        if (!drag) {
+            return;
+        }
+
+        const current = drag;
+        drag = null;
+
+        cancelAnimationFrame(dragFrame);
+        dragFrame = 0;
+
+        if (current.moved) {
+            suppressClick = {
+                id: current.id,
+                until: performance.now() + 400
+            };
+        }
+
+        if (
+            commit &&
+            current.moved &&
+            current.target !== null
+        ) {
+            state.positions.set(current.id, current.target);
+            state.moveSelected = null;
+        }
+
+        current.element.classList.remove('dragging');
+
+        for (const element of slots.values()) {
+            element.classList.remove('drop-target');
+        }
+
+        if (current.element.hasPointerCapture(current.pointer)) {
+            current.element.releasePointerCapture(current.pointer);
+        }
+
+        position(current.element, state.positions.get(current.id));
+        render();
+    }
+
+    function cancelDrag() {
+        if (drag) {
+            releaseDrag(false);
+        }
+    }
+
+    ui.board.addEventListener('pointerup', event => {
+        if (drag?.pointer === event.pointerId) {
+            releaseDrag(true);
+        }
+    });
+
+    ui.board.addEventListener('pointercancel', event => {
+        if (drag?.pointer === event.pointerId) {
+            releaseDrag(false);
+        }
+    });
+
+    ui.board.addEventListener('lostpointercapture', event => {
+        if (drag?.pointer === event.pointerId) {
+            releaseDrag(false);
+        }
+    });
+
+    window.addEventListener('blur', cancelDrag);
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            cancelDrag();
+        }
+    });
+
+    /* Tap, click, and keyboard selection */
+
+    ui.board.addEventListener('click', event => {
+        if (!ui.overlay.hidden) {
+            return;
+        }
+
+        const element = event.target.closest('.box, .slot');
+
+        if (!element) {
+            return;
+        }
+
+        if (element.classList.contains('slot')) {
+            if (
+                state.phase === PHASE.MOVE &&
+                state.moveSelected !== null
+            ) {
+                moveCase(
+                    state.moveSelected,
+                    Number(element.dataset.slot)
+                );
+            }
+
+            return;
+        }
+
+        const id = Number(element.dataset.case);
+
+        if (
+            suppressClick?.id === id &&
+            performance.now() < suppressClick.until &&
+            event.detail !== 0
+        ) {
+            suppressClick = null;
+            return;
+        }
+
+        if (state.phase === PHASE.MOVE) {
+            state.moveSelected = state.moveSelected === id ? null : id;
+        } else if (
+            state.phase === PHASE.PICK ||
+            state.phase === PHASE.GUESS
+        ) {
+            state.selected = id;
+        }
+
+        render();
+    });
+
+    /* Dialogs */
+
+    function showModal(content, onClose = null) {
+        cancelDrag();
+
+        if (ui.overlay.hidden) {
+            returnFocus = document.activeElement;
+        }
+
+        ui.modal.innerHTML = content;
+        modalClose = onClose;
+
+        ui.overlay.hidden = false;
+        ui.app.inert = true;
+        ui.app.setAttribute('aria-hidden', 'true');
+
+        ui.modal.scrollTop = 0;
+        ui.modal.focus({ preventScroll: true });
+    }
+
+    function hideModal() {
+        ui.overlay.hidden = true;
+        ui.modal.replaceChildren();
+
+        modalClose = null;
+        ui.app.inert = false;
+        ui.app.removeAttribute('aria-hidden');
+
+        if (returnFocus?.isConnected && !returnFocus.disabled) {
+            returnFocus.focus({ preventScroll: true });
         } else {
-            lockBtn.textContent = "Lock In";
-            lockBtn.disabled = true;
-        }
-
-        // Status text
-        if (phase === PHASE.MOVE) {
-            statusText.innerHTML = `Hider: <strong>${players[hider]}</strong> — Move the boxes (drag). Then tap <strong>Done Moving</strong>.`;
-        } else if (phase === PHASE.PICK_WINNER) {
-            statusText.innerHTML = `Hider: <strong>${players[hider]}</strong> — Select the winning case (glows), then <strong>Lock Winning Case</strong>.`;
-        } else if (phase === PHASE.GUESS) {
-            statusText.innerHTML = `Guesser: <strong>${players[guesser]}</strong> — Select a case (glows), then <strong>Lock In Guess</strong>.`;
-        } else if (phase === PHASE.WIN) {
-            statusText.innerHTML = `<strong>${players[guesser]}</strong> wins!`;
-        } else if (phase === PHASE.COIN) {
-            statusText.innerHTML = `Flipping coin…`;
-        } else {
-            statusText.innerHTML = `Ready…`;
-        }
-
-        // Disable cursor hint
-        for (const el of $$(".box", board)) {
-            if (allowDrag) el.classList.remove("disabled");
-            else el.classList.add("disabled");
+            const target = ui.actionBtn.disabled ? ui.helpBtn : ui.actionBtn;
+            target.focus({ preventScroll: true });
         }
     }
 
-    // ---------------- Overlays ----------------
-    function showOverlay(contentHTML) {
-        modal.innerHTML = contentHTML;
-        overlay.style.display = "flex";
-    }
-    function hideOverlay() {
-        overlay.style.display = "none";
-        modal.innerHTML = "";
-    }
+    ui.overlay.addEventListener('keydown', event => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
 
-    function namesOverlay() {
-        showOverlay(`
-      <h2>Enter Player Names</h2>
-      <p>We’ll flip a coin to decide who goes first (as the <strong>Guesser</strong>).</p>
-      <div class="row">
-        <input id="nameA" placeholder="Player 1 name" maxlength="18" autocomplete="off" />
-        <input id="nameB" placeholder="Player 2 name" maxlength="18" autocomplete="off" />
-      </div>
-      <div class="modalActions">
-        <button class="secondary" id="namesFill">Random Names</button>
-        <button class="good" id="namesGo" disabled>Start</button>
-      </div>
+            if (modalClose) {
+                modalClose();
+            }
+
+            return;
+        }
+
+        if (event.key !== 'Tab') {
+            return;
+        }
+
+        const focusable = [
+            ...ui.modal.querySelectorAll(
+                'button:not(:disabled), input:not(:disabled), [tabindex="0"]'
+            )
+        ];
+
+        if (!focusable.length) {
+            event.preventDefault();
+            return;
+        }
+
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+
+        if (
+            event.shiftKey &&
+            (
+                document.activeElement === first ||
+                document.activeElement === ui.modal
+            )
+        ) {
+            event.preventDefault();
+            last.focus();
+        } else if (
+            !event.shiftKey &&
+            (
+                document.activeElement === last ||
+                document.activeElement === ui.modal
+            )
+        ) {
+            event.preventDefault();
+            first.focus();
+        }
+    });
+
+    /* Player setup */
+
+    function showNames() {
+        showModal(`
+      <p class="eyebrow">Beast Games · Two players</p>
+
+      <h2 id="modalTitle">
+        Ten cases.<br>
+        One winning choice.
+      </h2>
+
+      <p class="modal-copy">
+        Take turns hiding and guessing on one screen.
+        Find the winning case to win the game.
+      </p>
+
+      <form id="namesForm">
+        <div class="name-fields">
+          <label>
+            Player one
+            <input
+              id="nameA"
+              name="playerOne"
+              placeholder="First name"
+              maxlength="18"
+              autocomplete="off"
+              autocapitalize="words"
+              enterkeyhint="next"
+              required
+            >
+          </label>
+
+          <label>
+            Player two
+            <input
+              id="nameB"
+              name="playerTwo"
+              placeholder="First name"
+              maxlength="18"
+              autocomplete="off"
+              autocapitalize="words"
+              enterkeyhint="go"
+              required
+            >
+          </label>
+        </div>
+
+        <div class="form-note" id="nameNote" role="status">
+          Enter two different names to get started.
+        </div>
+
+        <div class="modal-actions">
+          <button class="secondary" id="randomNames" type="button">
+            Random names
+          </button>
+
+          <button class="primary" id="startBtn" type="submit" disabled>
+            Let’s play
+          </button>
+        </div>
+      </form>
     `);
 
-        const nameA = $("#nameA", modal);
-        const nameB = $("#nameB", modal);
-        const go = $("#namesGo", modal);
-        const fill = $("#namesFill", modal);
+        const a = $('#nameA', ui.modal);
+        const b = $('#nameB', ui.modal);
+        const start = $('#startBtn', ui.modal);
 
         const validate = () => {
-            const a = nameA.value.trim();
-            const b = nameB.value.trim();
-            go.disabled = !(a && b && a.toLowerCase() !== b.toLowerCase());
+            const duplicate =
+                a.value.trim().toLocaleLowerCase() ===
+                b.value.trim().toLocaleLowerCase();
+
+            start.disabled =
+                !a.value.trim() ||
+                !b.value.trim() ||
+                duplicate;
+
+            $('#nameNote', ui.modal).textContent =
+                a.value.trim() && b.value.trim() && duplicate
+                    ? 'Use different names so you can tell whose turn it is.'
+                    : 'A coin flip decides who guesses first.';
         };
 
-        nameA.addEventListener("input", validate);
-        nameB.addEventListener("input", validate);
+        a.addEventListener('input', validate);
+        b.addEventListener('input', validate);
 
-        fill.addEventListener("click", () => {
-            const pool = shuffle(["Nova", "Blaze", "Shadow", "Rogue", "Pixel", "Viper", "Koda", "Skye", "Atlas", "Echo", "Jinx", "River"]);
-            nameA.value = pool[0];
-            nameB.value = pool[1];
+        $('#randomNames', ui.modal).addEventListener('click', () => {
+            const names = [
+                'Nova',
+                'Blaze',
+                'Shadow',
+                'Rogue',
+                'Pixel',
+                'Viper',
+                'Koda',
+                'Skye',
+                'Atlas',
+                'Echo',
+                'Jinx',
+                'River'
+            ];
+
+            a.value = names.splice(
+                Math.floor(Math.random() * names.length),
+                1
+            )[0];
+
+            b.value = names[Math.floor(Math.random() * names.length)];
+
             validate();
         });
 
-        go.addEventListener("click", () => {
-            players.A = nameA.value.trim();
-            players.B = nameB.value.trim();
-            hideOverlay();
+        $('#namesForm', ui.modal).addEventListener('submit', event => {
+            event.preventDefault();
+            validate();
+
+            if (start.disabled) {
+                return;
+            }
+
+            state.players = {
+                A: a.value.trim(),
+                B: b.value.trim()
+            };
+
+            document.activeElement.blur();
             startCoinFlip();
         });
-
-        setPhase(PHASE.NAMES);
-        updateUI();
     }
 
-    function coinFlipOverlay() {
-        showOverlay(`
-      <h2>Coin Flip</h2>
-      <p>Slower flip to decide who goes first (as the <strong>Guesser</strong>).</p>
-      <div class="coinWrap">
-        <div class="coin spin" id="coinEl">
-          <div class="coinFace front">
-            <div>
-              <div class="coinName">${players.A}</div>
-              <div class="coinSub">Heads</div>
-            </div>
-          </div>
-          <div class="coinFace back">
-            <div>
-              <div class="coinName">${players.B}</div>
-              <div class="coinSub">Tails</div>
-            </div>
-          </div>
-        </div>
-        <div class="coinSub" id="coinMsg">Spinning…</div>
-        <div class="modalActions">
-          <button class="secondary" id="skipFlip">Skip</button>
-        </div>
-      </div>
-    `);
-    }
+    /* Coin flip */
 
-    function lookAwayOverlay(lookAwayPlayerKey, nextForPlayerKey, text) {
-        const looker = players[lookAwayPlayerKey];
-        const next = players[nextForPlayerKey];
-        showOverlay(`
-      <h2>Look Away!</h2>
-      <p><strong>${looker}</strong>, don’t look at the screen.</p>
-      <p>${text}</p>
-      <div class="modalActions">
-        <button class="good" id="lookAwayReady">${next} is ready</button>
-      </div>
-    `);
-        $("#lookAwayReady", modal).addEventListener("click", () => {
-            hideOverlay();
-            clearSelections();
-            setPhase(PHASE.MOVE);
-        });
-    }
-
-    function passDeviceOverlay(toPlayerKey) {
-        const toName = players[toPlayerKey];
-        showOverlay(`
-      <h2>Pass the Device</h2>
-      <p>Hand it to <strong>${toName}</strong>.</p>
-      <div class="modalActions">
-        <button class="good" id="passOk">${toName} is ready</button>
-      </div>
-    `);
-        $("#passOk", modal).addEventListener("click", () => {
-            hideOverlay();
-            clearSelections();
-            setPhase(PHASE.GUESS);
-        });
-    }
-
-    function wrongGuessOverlay(winningNumber) {
-        showOverlay(`
-      <h2>❌ Wrong!</h2>
-      <p>The winning case was <strong>${winningNumber}</strong>.</p>
-      <p>Removing your chosen case and switching roles.</p>
-      <div class="modalActions">
-        <button class="good" id="wrongOk">Continue</button>
-      </div>
-    `);
-        $("#wrongOk", modal).addEventListener("click", () => {
-            hideOverlay();
-            beginRoundLookAwayForMove();
-        });
-    }
-
-    function winOverlay(winnerKey) {
-        const winner = players[winnerKey];
-        showOverlay(`
-      <h2>🏆 ${winner} Wins!</h2>
-      <p>The screen turns gold to celebrate.</p>
-      <div class="modalActions">
-        <button class="good" id="playAgain">Play Again</button>
-      </div>
-    `);
-        $("#playAgain", modal).addEventListener("click", () => {
-            document.body.classList.remove("win");
-            hideOverlay();
-            hardReset();
-        });
-    }
-
-    // ---------------- Flow ----------------
     function startCoinFlip() {
+        cancelTimers();
         setPhase(PHASE.COIN);
-        updateUI();
-        coinFlipOverlay();
 
-        const msg = $("#coinMsg", modal);
-        const coinEl = $("#coinEl", modal);
-        const skip = $("#skipFlip", modal);
+        showModal(`
+      <p class="eyebrow">First things first</p>
+      <h2 id="modalTitle">Who goes first?</h2>
+
+      <p class="modal-copy">
+        The coin decides who takes the first guess.
+      </p>
+
+      <div class="coin-wrap">
+        <div class="coin spin" id="coin" aria-hidden="true">
+          <div class="coin-face coin-front">
+            <span class="coin-name">${name('A')}</span>
+            <span class="coin-caption">Heads</span>
+          </div>
+
+          <div class="coin-face coin-back">
+            <span class="coin-name">${name('B')}</span>
+            <span class="coin-caption">Tails</span>
+          </div>
+        </div>
+
+        <div class="coin-message" id="coinMessage" role="status">
+          Flipping the coin…
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="secondary" id="skipCoin">
+          Skip animation
+        </button>
+      </div>
+    `);
 
         let finished = false;
 
         const finish = () => {
-            if (finished) return;
+            if (finished || state.phase !== PHASE.COIN) {
+                return;
+            }
+
             finished = true;
+            cancelTimers();
 
-            coinWinner = (Math.random() < 0.5) ? "A" : "B";
-            guesser = coinWinner;
-            hider = (guesser === "A") ? "B" : "A";
+            state.guesser = Math.random() < .5 ? 'A' : 'B';
+            state.hider = otherPlayer(state.guesser);
 
-            coinEl.classList.remove("spin");
-            coinEl.style.transform = (coinWinner === "A") ? "rotateY(0deg)" : "rotateY(180deg)";
+            const coin = $('#coin', ui.modal);
 
-            msg.innerHTML = `<strong>${players[guesser]}</strong> goes first as the <strong>Guesser</strong>.<br/>
-                       <span style="color:var(--muted)">Hider: <strong>${players[hider]}</strong></span><br/>
-                       <span style="color:var(--muted)">Starting in 5 seconds…</span>`;
+            coin.classList.remove('spin');
+            coin.style.transform =
+                state.guesser === 'A'
+                    ? 'rotateY(0deg)'
+                    : 'rotateY(180deg)';
 
-            // IMPORTANT: keep name visible for at least 5 seconds
-            setTimeout(() => {
-                hideOverlay();
-                beginRoundLookAwayForMove();
-            }, 5200);
+            $('#coinMessage', ui.modal).textContent =
+                `${state.players[state.guesser]} guesses first. ` +
+                `${state.players[state.hider]} hides. Get ready…`;
+
+            $('#skipCoin', ui.modal).hidden = true;
+
+            later(beginRound, COIN_RESULT_MS);
         };
 
-        // slower total flip time
-        const timer = setTimeout(() => finish(), 6500);
-        skip.addEventListener("click", () => { clearTimeout(timer); finish(); });
+        $('#skipCoin', ui.modal).addEventListener('click', finish);
 
-        updateUI();
+        const reducedMotion = window.matchMedia(
+            '(prefers-reduced-motion: reduce)'
+        ).matches;
+
+        later(finish, reducedMotion ? 0 : COIN_SPIN_MS);
     }
 
-    function beginRoundLookAwayForMove() {
-        winningBoxId = null;
-        selectedWinningBoxId = null;
-        selectedGuessBoxId = null;
-        clearSelections();
+    /* Round flow */
 
-        setPhase(PHASE.LOOK_AWAY_FOR_MOVE);
-        updateUI();
+    function beginRound() {
+        state.winner = null;
+        setPhase(PHASE.PRIVATE);
 
-        lookAwayOverlay(
-            guesser,
-            hider,
-            `First, <strong>${players[hider]}</strong> will rearrange the boxes. After moving, they will pick and lock the winning case.`
-        );
+        showModal(`
+      <p class="eyebrow">
+        Round ${state.round} · Private turn
+      </p>
+
+      <h2 id="modalTitle">
+        ${name(state.guesser)}, look away.
+      </h2>
+
+      <p class="modal-copy">
+        Give the screen to <strong>${name(state.hider)}</strong>
+        to rearrange the cases and choose the winner.
+      </p>
+
+      <div class="modal-actions">
+        <button class="primary" id="readyMove">
+          I’m ${name(state.hider)}. I’m ready.
+        </button>
+      </div>
+    `);
+
+        $('#readyMove', ui.modal).addEventListener('click', () => {
+            setPhase(PHASE.MOVE);
+            hideModal();
+        });
     }
 
-    function endMovePhase() {
-        // After moving, hider now chooses winning case (and must lock it)
-        clearSelections();
-        setPhase(PHASE.PICK_WINNER);
-    }
+    function lockWinner() {
+        if (state.selected === null) {
+            return;
+        }
 
-    function lockWinningCase() {
-        if (phase !== PHASE.PICK_WINNER) return;
-        if (!selectedWinningBoxId) return;
+        state.winner = state.selected;
 
-        // Save the winning case
-        winningBoxId = selectedWinningBoxId;
+        // Clear the visual and accessible selection before handing over the screen.
+        setPhase(PHASE.PASS);
 
-        // IMPORTANT: remove any visible glow BEFORE pass screen
-        for (const el of $$(".box", board)) el.classList.remove("selected");
-        selectedWinningBoxId = null;
+        showModal(`
+      <p class="eyebrow">Choice locked</p>
+      <h2 id="modalTitle">Pass the screen.</h2>
 
-        setPhase(PHASE.PASS_TO_GUESS);
-        updateUI();
-        passDeviceOverlay(guesser);
+      <p class="modal-copy">
+        It’s <strong>${name(state.guesser)}’s</strong> turn to guess.
+        Your choice stays secret.
+      </p>
+
+      <div class="modal-actions">
+        <button class="primary" id="readyGuess">
+          I’m ${name(state.guesser)}. Let me guess.
+        </button>
+      </div>
+    `);
+
+        $('#readyGuess', ui.modal).addEventListener('click', () => {
+            setPhase(PHASE.GUESS);
+            hideModal();
+        });
     }
 
     function lockGuess() {
-        if (phase !== PHASE.GUESS) return;
-        if (!selectedGuessBoxId) return;
-        if (!winningBoxId) return; // safety
+        const picked = state.selected;
+        const winner = state.winner;
 
-        const picked = selectedGuessBoxId;
+        if (picked === null || winner === null) {
+            return;
+        }
 
-        if (picked === winningBoxId) {
+        if (picked === winner) {
             setPhase(PHASE.WIN);
-            updateUI();
 
-            document.body.classList.add("win");
-            boardShell.classList.add("winGlow");
-            setTimeout(() => boardShell.classList.remove("winGlow"), 1000);
+            document.body.classList.add('win');
+            ui.boardShell.classList.add('win-glow');
 
-            winOverlay(guesser);
+            showModal(`
+        <p class="eyebrow">The winning pick</p>
+
+        <div class="result-badge" aria-label="Winning case">
+          ${winner}
+        </div>
+
+        <h2 id="modalTitle">
+          ${name(state.guesser)} wins!
+        </h2>
+
+        <p class="modal-copy">
+          Case ${winner} was the winner.
+          You found it in round ${state.round}.
+        </p>
+
+        <div class="modal-actions">
+          <button class="secondary" id="newPlayers">
+            New players
+          </button>
+
+          <button class="primary" id="rematch">
+            Play again
+          </button>
+        </div>
+      `);
+
+            $('#rematch', ui.modal).addEventListener('click', () => {
+                resetGame(true);
+            });
+
+            $('#newPlayers', ui.modal).addEventListener('click', () => {
+                resetGame();
+            });
+
             return;
         }
 
-        // WRONG: flash red, reveal correct case, remove picked, swap roles, continue
-        flashWrong();
+        // Freeze input immediately so double taps cannot submit another guess.
+        setPhase(PHASE.RESULT);
 
-        const winningNumber = winningBoxId.replace("box-", "");
-        removeBox(picked);
+        state.positions.delete(picked);
+        cases.get(picked).remove();
+        cases.delete(picked);
 
-        // swap roles
-        const oldGuesser = guesser;
-        guesser = hider;
-        hider = oldGuesser;
+        render();
 
-        round++;
-        updateUI();
+        showModal(`
+      <p class="eyebrow">Not this time</p>
 
-        // show which case it was in
-        clearSelections();
-        setTimeout(() => {
-            wrongGuessOverlay(winningNumber);
-        }, 450);
+      <div class="result-badge">
+        ${winner}
+      </div>
+
+      <h2 id="modalTitle">
+        The winner was case ${winner}.
+      </h2>
+
+      <p class="modal-copy">
+        Case ${picked} is out.
+        ${state.positions.size}
+        ${state.positions.size === 1 ? 'case remains' : 'cases remain'}.
+        Switch roles and try again.
+      </p>
+
+      <div class="modal-actions">
+        <button class="primary" id="nextRound">
+          Next round
+        </button>
+      </div>
+    `);
+
+        $('#nextRound', ui.modal).addEventListener('click', () => {
+            [state.guesser, state.hider] = [state.hider, state.guesser];
+            state.round++;
+            beginRound();
+        });
     }
 
-    function flashWrong() {
-        document.body.classList.add("wrong");
-        boardShell.classList.add("wrongGlow");
-        setTimeout(() => {
-            document.body.classList.remove("wrong");
-            boardShell.classList.remove("wrongGlow");
-        }, 1100);
-    }
+    /* Main controls */
 
-    // ---------------- Buttons ----------------
-    doneMovingBtn.addEventListener("click", () => {
-        if (phase !== PHASE.MOVE) return;
-        endMovePhase();
+    ui.actionBtn.addEventListener('click', () => {
+        if (state.phase === PHASE.MOVE) {
+            setPhase(PHASE.PICK);
+        } else if (state.phase === PHASE.PICK) {
+            lockWinner();
+        } else if (state.phase === PHASE.GUESS) {
+            lockGuess();
+        }
     });
 
-    lockBtn.addEventListener("click", () => {
-        if (phase === PHASE.PICK_WINNER) lockWinningCase();
-        else if (phase === PHASE.GUESS) lockGuess();
+    ui.helpBtn.addEventListener('click', () => {
+        if (!ui.overlay.hidden) {
+            return;
+        }
+
+        showModal(`
+      <p class="eyebrow">The case game</p>
+      <h2 id="modalTitle">How to play</h2>
+
+      <ol class="rules-list">
+        <li>
+          A coin flip picks the first guesser.
+          The other player hides.
+        </li>
+
+        <li>
+          The guesser looks away. The hider moves cases into empty
+          spaces, then selects and locks the winning case.
+        </li>
+
+        <li>
+          Pass the screen. The guesser selects a case and locks
+          in the guess.
+        </li>
+
+        <li>
+          A correct guess wins. Otherwise, remove the guessed case,
+          switch roles, and play again.
+        </li>
+      </ol>
+
+      <p class="form-note">
+        To move: drag a case, or tap it and then tap an empty space.
+        Keyboard: use Tab to reach a case or space, then Enter or
+        Space to select.
+      </p>
+
+      <div class="modal-actions">
+        <button class="primary" id="closeHelp">
+          Back to game
+        </button>
+      </div>
+    `, hideModal);
+
+        $('#closeHelp', ui.modal).addEventListener('click', hideModal);
     });
 
-    resetBtn.addEventListener("click", () => hardReset());
-
-    // ---------------- Misc ----------------
-    function enforceAliveBoxes() {
-        for (const el of $$(".box", board)) {
-            const id = el.dataset.boxId;
-            if (!aliveBoxes.has(id)) el.remove();
-        }
-    }
-
-    window.addEventListener("resize", () => positionAllSlotsAndBoxes());
-
-    function hardReset() {
-        document.body.classList.remove("win");
-        document.body.classList.remove("wrong");
-        boardShell.classList.remove("winGlow");
-        boardShell.classList.remove("wrongGlow");
-
-        round = 1;
-        players = { A: "", B: "" };
-        coinWinner = "A";
-        guesser = "A";
-        hider = "B";
-        winningBoxId = null;
-        selectedWinningBoxId = null;
-        selectedGuessBoxId = null;
-
-        initBoxes();
-        namesOverlay();
-    }
-
-    setInterval(enforceAliveBoxes, 200);
-
-    // Patch phase entry side effects
-    const _setPhase = setPhase;
-    setPhase = function (p) {
-        phase = p;
-
-        if (phase === PHASE.MOVE) {
-            allowDrag = true;
-            updateUI();
+    ui.resetBtn.addEventListener('click', () => {
+        if (!ui.overlay.hidden) {
             return;
         }
 
-        if (phase === PHASE.PICK_WINNER || phase === PHASE.GUESS) {
-            allowDrag = false;
-            updateUI();
+        showModal(`
+      <p class="eyebrow">Fresh start</p>
+      <h2 id="modalTitle">Start a new game?</h2>
+
+      <p class="modal-copy">
+        This ends the current game and brings back all ten cases.
+      </p>
+
+      <div class="modal-actions">
+        <button class="secondary" id="cancelReset">
+          Keep playing
+        </button>
+
+        <button class="primary" id="confirmReset">
+          New game
+        </button>
+      </div>
+    `, hideModal);
+
+        $('#cancelReset', ui.modal).addEventListener('click', hideModal);
+
+        $('#confirmReset', ui.modal).addEventListener('click', () => {
+            resetGame();
+        });
+    });
+
+    /* Screen resizing and mobile keyboard */
+
+    new ResizeObserver(scheduleLayout).observe(ui.board);
+
+    window.addEventListener('resize', scheduleLayout);
+
+    // Keep dialogs above the virtual keyboard without disabling pinch-to-zoom.
+    function fitVisualViewport() {
+        const viewport = window.visualViewport;
+
+        if (!viewport || viewport.scale !== 1) {
             return;
         }
 
-        allowDrag = false;
-        updateUI();
-    };
+        ui.overlay.style.height = `${viewport.height}px`;
+        ui.overlay.style.top = `${viewport.offsetTop}px`;
 
-    // Initialize
-    initBoxes();
-    namesOverlay();
+        scheduleLayout();
+    }
+
+    window.visualViewport?.addEventListener('resize', fitVisualViewport);
+    window.visualViewport?.addEventListener('scroll', fitVisualViewport);
+
+    /* Initialize */
+
+    resetGame();
+    fitVisualViewport();
 })();

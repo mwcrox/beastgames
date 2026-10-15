@@ -2,48 +2,98 @@
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Beast Games</title>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+    <meta name="theme-color" content="#0a121f">
+    <meta name="description"
+        content="A two-player game of memory, misdirection, and ten numbered cases. Play together on one screen.">
+    <title>Beast Games — The Case Game</title>
     <link rel="stylesheet" href="styles.css">
+    <script src="script.js" defer></script>
 </head>
 
 <body>
-    <div class="app">
-        <header>
-            <div class="title">
-                <h1>Beast Games</h1>
-                <div class="sub" id="roundInfo">Round: <strong id="roundNum">1</strong> • Boxes left: <strong
-                        id="boxesLeft">10</strong></div>
-            </div>
+    <div class="app" id="app">
+        <header class="site-header">
+            <div class="brand">
+                <span class="brand-mark" aria-hidden="true">
+                    <i></i><i></i><i></i><i></i>
+                </span>
 
-            <div class="status" id="statusText">
-                Loading…
-            </div>
-
-            <div class="controls">
-                <button class="secondary" id="resetBtn" title="Reset everything">Reset</button>
-                <button class="good" id="doneMovingBtn" disabled>Done Moving</button>
-                <button class="good" id="lockBtn" disabled>Lock In</button>
-            </div>
-        </header>
-
-        <main>
-            <div class="boardShell" id="boardShell">
-                <div class="board" id="board"></div>
-                <div class="hint">
-                    Drag boxes during <strong>Move</strong> • Tap to select during <strong>Pick/Guess</strong>
-                    <span class="pill"><span class="dot"></span><span id="phasePill">—</span></span>
+                <div>
+                    <h1>BEAST<span>GAMES</span></h1>
+                    <p class="brand-caption">THE CASE GAME</p>
                 </div>
             </div>
 
-            <div class="overlay" id="overlay" style="display:none;">
-                <div class="modal" id="modal"></div>
+            <div class="game-stats" aria-label="Game progress">
+                <div class="stat">
+                    <span>Round</span>
+                    <strong id="roundNum">1</strong>
+                </div>
+
+                <div class="stat">
+                    <span>Cases left</span>
+                    <strong id="boxesLeft">10</strong>
+                </div>
             </div>
+
+            <nav class="header-actions" aria-label="Game controls">
+                <button class="icon-button" id="helpBtn" type="button" aria-label="How to play" title="How to play">
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <circle cx="12" cy="12" r="8.5" />
+                        <path d="M9.8 9a2.3 2.3 0 0 1 4.5.6c0 1.6-2.3 1.9-2.3 3.4" />
+                        <path d="M12 16.5h.01" />
+                    </svg>
+                </button>
+
+                <button class="icon-button" id="resetBtn" type="button" aria-label="Start a new game"
+                    title="Start a new game">
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M4.5 8a8 8 0 1 1-.3 7M4.5 3.5V8H9" />
+                    </svg>
+                </button>
+            </nav>
+        </header>
+
+        <main class="game-layout">
+            <section class="turn-strip" aria-label="Current turn">
+                <div class="turn-identity">
+                    <span class="phase-pill" id="phasePill">Get ready</span>
+                    <span class="player-name" id="activePlayer">Two players. One screen.</span>
+                </div>
+
+                <div class="turn-instructions" role="status" aria-live="polite" aria-atomic="true">
+                    <h2 id="statusText">Every case counts.</h2>
+                    <p id="statusHint">Start a game to take your places.</p>
+                </div>
+            </section>
+
+            <section class="board-shell" id="boardShell" aria-label="Playing field">
+                <div class="board" id="board" data-phase="setup" aria-label="Case positions"></div>
+            </section>
         </main>
+
+        <footer class="action-dock">
+            <p class="dock-note">
+                <span aria-hidden="true"></span>
+                Stay sharp. Keep them guessing.
+            </p>
+
+            <button class="primary action-button" id="actionBtn" type="button" disabled>
+                Start game
+            </button>
+        </footer>
     </div>
 
-    <script src="script.js" defer></script>
+    <div class="overlay" id="overlay" hidden>
+        <div class="modal" id="modal" role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="modalTitle"></div>
+    </div>
+
+    <noscript>
+        <div class="no-script">Enable JavaScript to play Beast Games.</div>
+    </noscript>
 </body>
 
 </html>
